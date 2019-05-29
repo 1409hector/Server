@@ -4,94 +4,129 @@
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <strings.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#define MAXLINE 8192 /* Max text line length */
+#define LISTENQ 1024 /* Second argument to listen() */
+#define BUFSIZE 1024
 
-int open_listenfd(int port) {
-    int listenfd;
-    int optval = 1;
+int open_socket(void);
+void clientHandler (int clntSock);
 
-    struct sockaddr_in serveraddr;
+static const int MAXCONNECTIONS  = 3;
 
-    //Create a socket file descriptor
-    if((listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) return -1;
+int main (int argc, char *argv[]){
 
-    //Set socket options to associate with listenfd
-    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, (const void *)&optval, sizeof(int));
+// Testing for correct number of arguments
+    if (argc !=2)
+        printf("Usage: ./%s <PORT>\n", argv[0]);
 
-    //Zero out the serveraddr struct
-    bzero((char *)&serveraddr, sizeof(serveraddr));
+// This is the second argument and also port this server will be listening on.
+    in_port_t servport = atoi(argv[1]);
 
-    //Set internet protocol
-    serveraddr.sin_family = AF_INET;
+//Create the socket to listen for connections
+    int servSock;
+    if ((servSock = open_socket()) < 0)
+        perror("Socket creation failed");
 
-    //Allow incoming connections from any IP
-    serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);
+//Create the server address structure
+    struct sockaddr_in servAddress;                                     //address structure
+    memset(&servAddress, 0, sizeof(servAddress));                       //set the structure to 0.  (bzero is deprecated DO NOT USE)
+    servAddress.sin_family = AF_INET;
+    servAddress.sin_addr.s_addr = htonl(INADDR_ANY);                                //Address family ipv4 or ipv6
+//inet_pton(AF_INET, "127.0.0.1", &servAddress.sin_addr.s_addr);                   //listening on loopback
+    servAddress.sin_port = htons(servport);                             //Set the port on network byte order (BiG Endian)
 
-    //Indicate port number
-    serveraddr.sin_port = htons((unsigned short) port);
+//Bind the socket to the local server address
+    if (bind(servSock, (struct sockaddr *) &servAddress, sizeof(servAddress)) < 0)
+    {
+        perror("Failed binding the address...");
+    }
 
-    //Bind file descriptor to the socket options struct
-    bind(listenfd, (struct sockaddr *)&serveraddr, sizeof(serveraddr));
+//Allow the socket to listen for connections
+    if (listen(servSock, MAXCONNECTIONS) < 0)
+    {
+        perror("Failed setting up listener...");
+    }
 
-    //listen on the port and get ready to accept requests
-    listen(listenfd, 1024);
+//Infinite loop to accept connections
+    for(;;)
+    {
+        struct sockaddr_in clientAddress;                               //Client Address struture for each new connection
+        socklen_t clientlen = sizeof(clientAddress);                    //Get the lenght of the client address structure for later use
 
-    return listenfd;
+        //Waiting for client connections
+        int clntSock = accept(servSock, (struct sockaddr *)&clientAddress, &clientlen);
+        if (clntSock < 0) {
+            perror("Failed accepting the cconection...");
+        }
+
+        //Should be connected at this point
+
+        char clientName[INET_ADDRSTRLEN];                               // Array to hold the string of the client address once converted by ntop
+        if (inet_ntop(AF_INET, &clientAddress.sin_addr.s_addr, clientName, sizeof(clientName)) != NULL) {
+            printf("Handling client %s/%d\n", clientName, ntohs(clientAddress.sin_port));
+        }
+
+        clientHandler(clntSock);
+
+    }
+
+    return 0;
 
 }
 
-int main(int argc, char *argv[]) {
-    int listenfd, connfd, port;
-
-    struct sockaddr_in clientaddr;
-
-    socklen_t clientlen;
-
-    struct hostent *hp;
-
-    char *haddrp;
-
-    unsigned short client_port;
-
-    if (argc != 2) {
-        fprintf(stderr, "usage: %s <port>\n", argv[0]);
+int open_socket() {
+    int sockfd;
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        perror("socket(): failed\n");
     }
 
-    //Convert argument 1 to port
-    port = atoi(argv[1]);
+    printf("Socket created!\n");
 
-    //Open listening socket
-    listenfd = open_listenfd(port);
+    //TODO make socket reusable (man setsockopt, man 7 socket)   ---NOT SURE WHAT THIS MEANS
 
-    printf("Server is listening on port %d\n", port);
+    return sockfd;
 
-    while(1) {
+}
 
-        clientlen = sizeof(clientaddr);
+void clientHandler (int clntSock){
 
-        //Accept connection
-        connfd = accept(listenfd, (struct sockaddr *)(&clientaddr), &clientlen);
+    //Echo string buffer I/O
+    char buffer[BUFSIZE];
 
-        //Determine domain name and IP address of client
-        hp = gethostbyaddr((const char *)(&clientaddr.sin_addr.s_addr),
-                           sizeof(clientaddr.sin_addr.s_addr), AF_INET);
+    //Receive message from the client
+    ssize_t numBytesRcvd = recv(clntSock, buffer, BUFSIZE, 0);
+    if (numBytesRcvd < 0)
+    {
+        perror("Receiveng data failed");
+    }
 
-        //Get connected client's IP address
-        haddrp = inet_ntoa(clientaddr.sin_addr);
+    //Send in a while loop, recheck at the end if there is more to receive and resend
+    while (numBytesRcvd > 0){
 
-        //Get connected client's port
-        client_port = ntohs(clientaddr.sin_port);
+        ssize_t numBytesSent = send(clntSock, buffer, BUFSIZE, 0);
+        if (numBytesSent = 0)
+        {
+            perror("Sending data failed");
+        }
 
-        //Print client info
-        printf("Server recieved a connection to %s on IP %s on port %u and has ephemeral port %u\n",hp->h_name, haddrp, port, client_port);
+        else if (numBytesSent != numBytesRcvd)
+        {
+            printf("Sent: Unexpected number of bytes.");            //OK, and now what??
+        }
 
-        printf("%d\n",connfd);
-
-        close(connfd);
+        ssize_t numBytesRcvd = recv(clntSock, buffer, BUFSIZE, 0);
+        if (numBytesRcvd < 0)
+        {
+            perror("Receiveng data failed");
+        }
 
     }
+
+    close(clntSock);
 
 }
